@@ -8,6 +8,11 @@ import proccessURLToPostgresqlVectorStore, {
 } from "./services/from-template-webpage-loader";
 
 import * as readline from "readline";
+import {
+  usePgVectorStore,
+  pool,
+  proccessURLToPgVectorStore,
+} from "./services/from-template-webpage-loader-pgvector";
 
 async function askQuestion(query: string): Promise<string> {
   const rl = readline.createInterface({
@@ -23,8 +28,7 @@ async function askQuestion(query: string): Promise<string> {
 }
 
 (async () => {
-  // const response = await proccessURLToPostgresqlVectorStore();
-  //const response = await fromTemplateWebUrl("https://www.firstbittech.com/");
+  //await proccessURLToPgVectorStore();
   while (true) {
     const userInput = await askQuestion(
       "Enter your question (or type 'exit' to quit): "
@@ -36,8 +40,12 @@ async function askQuestion(query: string): Promise<string> {
       console.log("Goodbye!");
       break;
     }
-    await useFaissVectorStore(userInput);
+    console.log("Thinking...");
+    await usePgVectorStore(userInput);
   }
+  // Cleanly close the PostgreSQL pool and exit
+  await pool.end();
+  process.exit(0);
 })();
 
 // const loader = new TextLoader("./src/data/sample.txt");
