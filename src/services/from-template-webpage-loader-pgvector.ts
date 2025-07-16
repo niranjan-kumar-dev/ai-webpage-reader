@@ -1,3 +1,32 @@
+// Utility function to get PGVectorStore config
+export function getPgVectorStoreConfig(): {
+  postgresConnectionOptions: PoolConfig;
+  tableName: string;
+  columns: {
+    vectorColumnName: string;
+    contentColumnName: string;
+    metadataColumnName: string;
+  };
+  distanceStrategy: DistanceStrategy;
+} {
+  return {
+    postgresConnectionOptions: {
+      type: "postgres",
+      host: "localhost",
+      port: 5432,
+      user: "postgres",
+      password: "root",
+      database: "gmrt_webpages",
+    } as PoolConfig,
+    tableName: "pages",
+    columns: {
+      vectorColumnName: "embedding",
+      contentColumnName: "content",
+      metadataColumnName: "metadata",
+    },
+    distanceStrategy: "cosine" as DistanceStrategy,
+  };
+}
 export const runtime = "nodejs";
 import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
 import { RetrievalQAChain } from "langchain/chains";
@@ -9,13 +38,27 @@ import { FaissStore } from "@langchain/community/vectorstores/faiss";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import * as dotenv from "dotenv";
 import { getChatModel } from "./model";
+import { Pool } from "pg";
+
+// Create and export a single Pool instance for use and cleanup
+export const pool = new Pool({
+  host: "localhost",
+  port: 5432,
+  user: "postgres",
+  password: "root",
+  database: "gmrt_webpages",
+});
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
 import { createRetrievalChain } from "langchain/chains/retrieval";
-
+import {
+  PGVectorStore,
+  DistanceStrategy,
+} from "@langchain/community/vectorstores/pgvector";
+import { PoolConfig } from "pg";
 dotenv.config();
 
-export async function proccessURLToPostgresqlVectorStore(): Promise<void> {
+export async function proccessURLToPgVectorStore(): Promise<void> {
   // const model = getChatModel();
   // if (!model) {
   //   throw new Error("No chat model found. Please check your configuration.");
@@ -82,6 +125,18 @@ export async function proccessURLToPostgresqlVectorStore(): Promise<void> {
   });
   const splitDocuments = await splitter.splitDocuments(documents);
   console.log("Split documents:", splitDocuments);
+
+  const documentsWithMetadata = splitDocuments.map((doc, index) => {
+    return new Document({
+      pageContent: doc.pageContent,
+      metadata: {
+        source: url,
+        chunkIndex: index,
+        createdAt: new Date().toISOString(),
+      },
+    });
+  });
+
   const embeddings = new HuggingFaceInferenceEmbeddings({
     apiKey: process.env.HUGGINGFACEHUB_API_KEY, // Defaults to process.env.HUGGINGFACEHUB_API_KEY
     model: process.env.HUGGINGFACEHUB_API_MODEL, // Defaults to `BAAI/bge-base-en-v1.5` if not provided
@@ -97,22 +152,36 @@ export async function proccessURLToPostgresqlVectorStore(): Promise<void> {
   if (!splitDocuments.length) {
     throw new Error("No documents to embed.");
   }
-  const vectorStore = await FaissStore.fromDocuments(
-    splitDocuments,
-    embeddings
-  );
+
+  try {
+    const vectorStore = await PGVectorStore.initialize(
+      embeddings,
+      getPgVectorStoreConfig()
+    );
+    console.log("Vector store initialized");
+
+    await vectorStore.addDocuments(documentsWithMetadata);
+    console.log("Documents added to vector store successfully");
+  } catch (error) {
+    console.error("Error saving vector store to PostgreSQL:", error);
+  }
+
+  // const vectorStore = await FaissStore.fromDocuments(
+  //   splitDocuments,
+  //   embeddings
+  // );
   //const vectorStore = await FaissStore.fromDocuments(allDocs, embeddings);
-  await vectorStore.save("./vector_store-url");
-  console.log("Vector store created and saved");
+  //await vectorStore.save("./vector_store-url");
+  //console.log("Vector store created and saved");
 }
 
 /*Using a Faiss Vector store in chain */
-export async function useFaissVectorStore(userPrompt: string): Promise<void> {
+export async function usePgVectorStore(userPrompt: string): Promise<void> {
   const model = getChatModel();
   if (!model) {
     throw new Error("No chat model found. Please check your configuration.");
   }
-  console.log("[AI WebReader] Model loaded");
+  //console.log("[AI WebReader] Model loaded");
 
   const promptTemplate = ChatPromptTemplate.fromTemplate(`
      Answer the user's question
@@ -125,21 +194,26 @@ export async function useFaissVectorStore(userPrompt: string): Promise<void> {
     prompt: promptTemplate,
   });
 
+  // Use a top-performing embedding model for best accuracy
   const embeddings = new HuggingFaceInferenceEmbeddings({
-    apiKey: process.env.HUGGINGFACEHUB_API_KEY, // Defaults to process.env.HUGGINGFACEHUB_API_KEY
-    model: process.env.HUGGINGFACEHUB_API_MODEL, // Defaults to `BAAI/bge-base-en-v1.5` if not provided
-    provider: "auto", // Falls back to auto selection mechanism within Hugging Face's inference API if not provided
+    apiKey: process.env.HUGGINGFACEHUB_API_KEY,
+    model: process.env.HUGGINGFACEHUB_API_MODEL, // Dimension: 768 (matches your DB)
+    provider: "auto",
   });
 
-  const vectorStore = await FaissStore.load("./vector_store-url", embeddings);
+  const vectorStore = await PGVectorStore.initialize(
+    embeddings,
+    getPgVectorStoreConfig()
+  );
 
-  // Create a retriever from the vector store
+  // Tune retriever for more context (increase k)
   const retriever = vectorStore.asRetriever({
     searchType: "similarity",
-    k: 1, // Number of documents to retrieve
+    k: 3, // Return top 3 similar chunks for better context
   });
+
   const retrievalChain = await createRetrievalChain({
-    retriever: retriever,
+    retriever,
     combineDocsChain: combineDocumentsChain,
   });
 
@@ -147,4 +221,4 @@ export async function useFaissVectorStore(userPrompt: string): Promise<void> {
   console.log("Response:", response.answer);
 }
 
-export default { proccessURLToPostgresqlVectorStore, useFaissVectorStore };
+export default { proccessURLToPgVectorStore, usePgVectorStore };

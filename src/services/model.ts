@@ -16,7 +16,7 @@ export function getChatModel() {
 
 function getOllamaModel() {
   return new ChatOllama({
-    model: process.env.LLM_MODEL || "gemma3:1b",
+    model: process.env.LLM_MODEL || "llama3.2",
     temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.7"),
   });
 }
