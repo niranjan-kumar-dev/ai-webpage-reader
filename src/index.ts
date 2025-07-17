@@ -13,6 +13,7 @@ import {
   pool,
   proccessURLToPgVectorStore,
 } from "./services/from-template-webpage-loader-pgvector";
+import { useConversationalRetrievalChain } from "./services/from-template-conversational-retrieval-chain";
 
 async function askQuestion(query: string): Promise<string> {
   const rl = readline.createInterface({
@@ -41,7 +42,8 @@ async function askQuestion(query: string): Promise<string> {
       break;
     }
     console.log("Thinking...");
-    await usePgVectorStore(userInput);
+    //await usePgVectorStore(userInput);
+    await useConversationalRetrievalChain(userInput);
   }
   // Cleanly close the PostgreSQL pool and exit
   await pool.end();

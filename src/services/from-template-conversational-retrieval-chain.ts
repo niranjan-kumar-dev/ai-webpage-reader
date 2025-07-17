@@ -1,3 +1,7 @@
+// Add global type for chat history
+declare global {
+  var _chatHistory: (AIMessage | HumanMessage)[] | undefined;
+}
 // Utility function to get PGVectorStore config
 export function getPgVectorStoreConfig(): {
   postgresConnectionOptions: PoolConfig;
@@ -39,7 +43,7 @@ import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import * as dotenv from "dotenv";
 import { getChatModel } from "./model";
 import { Pool } from "pg";
-
+import { createHistoryAwareRetriever } from "langchain/chains/history_aware_retriever";
 // Create and export a single Pool instance for use and cleanup
 export const pool = new Pool({
   host: "localhost",
@@ -48,7 +52,10 @@ export const pool = new Pool({
   password: "root",
   database: "gmrt_webpages",
 });
-import { ChatPromptTemplate } from "@langchain/core/prompts";
+import {
+  ChatPromptTemplate,
+  MessagesPlaceholder,
+} from "@langchain/core/prompts";
 import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
 import { createRetrievalChain } from "langchain/chains/retrieval";
 import {
@@ -56,6 +63,7 @@ import {
   DistanceStrategy,
 } from "@langchain/community/vectorstores/pgvector";
 import { PoolConfig } from "pg";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 dotenv.config();
 
 export async function proccessURLToPgVectorStore(): Promise<void> {
@@ -211,37 +219,35 @@ export async function proccessURLToPgVectorStore(): Promise<void> {
 }
 
 /*Using a Faiss Vector store in chain */
-export async function usePgVectorStore(userPrompt: string): Promise<void> {
+export async function useConversationalRetrievalChain(
+  userPrompt: string
+): Promise<void> {
   const model = getChatModel();
   if (!model) {
     throw new Error("No chat model found. Please check your configuration.");
   }
-  //console.log("[AI WebReader] Model loaded");
+  const promptTemplate = ChatPromptTemplate.fromMessages([
+    [
+      "system",
+      `You are an assistant answering questions based on the provided context from web pages.
+        Use only the information in {context} to answer the question below.
 
-  //   const promptTemplate = ChatPromptTemplate.fromTemplate(`
-  // You are an assistant answering questions based on the provided context from web pages.
-  // Use only the information in {context} to answer the question below.
-  // If the answer is not in the context, say "I don't know based on the provided information."
-  // Context: {context}
-  // Question: {input}
-  // Answer:
-  // `);
+        - Format your answer using **Markdown** (e.g., headings, bullet points, bold text).
+        - If the answer is not in the context, say "_I don't know based on the provided information._"
+        - Be as concise and direct as possible. If the answer is a name or title, respond with only that.
+        ### Chat History:
+        {chat_history}
+        ### Context:
+        {context}
 
-  const promptTemplate = ChatPromptTemplate.fromTemplate(`
-You are an assistant answering questions based on the provided context from web pages.
-Use only the information in {context} to answer the question below.
+        ### Question:
+        {input}
 
-- Format your answer using **Markdown** (e.g., headings, bullet points, bold text).
-- If the answer is not in the context, say "_I don't know based on the provided information._"
-
-### Context:
-{context}
-
-### Question:
-{input}
-
-### Answer (in Markdown):
-`);
+        ### Answer (in Markdown):
+        `,
+    ],
+    new MessagesPlaceholder("chat_history"),
+  ]);
 
   const combineDocumentsChain = await createStuffDocumentsChain({
     llm: model,
@@ -260,19 +266,68 @@ Use only the information in {context} to answer the question below.
     getPgVectorStoreConfig()
   );
 
-  // Tune retriever for more context (increase k)
+  // Tune retriever for concise answers (return only top chunk)
   const retriever = vectorStore.asRetriever({
     searchType: "similarity",
-    k: 3, // Return top 3 similar chunks for better context
+    k: 1, // Return only the top similar chunk for direct answers
   });
 
-  const retrievalChain = await createRetrievalChain({
+  // Create a history-aware retriever to rephrase the user's query based on the context
+  const retrievalPrompt = ChatPromptTemplate.fromMessages([
+    new MessagesPlaceholder("chat_history"),
+    ["user", "{input}"],
+    [
+      "user",
+      "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation. Only respond with the query, nothing else.",
+    ],
+  ]);
+
+  const historyAwareRetriever = await createHistoryAwareRetriever({
+    llm: model,
     retriever,
+    rephrasePrompt: retrievalPrompt,
+  });
+  const retrievalChain = await createRetrievalChain({
+    retriever: historyAwareRetriever,
     combineDocsChain: combineDocumentsChain,
   });
 
-  const response = await retrievalChain.invoke({ input: userPrompt });
-  console.log("Response:", response.answer);
+  // Improved dynamic chat history management
+  if (!globalThis._chatHistory) {
+    globalThis._chatHistory = [];
+  }
+
+  // Optionally, clear history if user types a special command (e.g., "reset")
+  if (userPrompt.trim().toLowerCase() === "reset") {
+    globalThis._chatHistory = [];
+    console.log("Chat history reset.");
+    return;
+  }
+
+  // Add the user's message
+  globalThis._chatHistory.push(new HumanMessage(userPrompt));
+
+  // Only keep the last 3 pairs (HumanMessage/AIMessage) for context
+  const historyPairs = [];
+  for (let i = globalThis._chatHistory.length - 1; i >= 0; i -= 2) {
+    if (globalThis._chatHistory[i] && globalThis._chatHistory[i - 1]) {
+      historyPairs.unshift(globalThis._chatHistory[i - 1]);
+      historyPairs.unshift(globalThis._chatHistory[i]);
+    }
+    if (historyPairs.length >= 6) break;
+  }
+
+  const response = await retrievalChain.invoke({
+    input: userPrompt,
+    chat_history: historyPairs,
+  });
+  // Fallback if answer is empty
+  let answer =
+    response.answer && response.answer.trim()
+      ? response.answer
+      : "_I don't know based on the provided information._";
+  globalThis._chatHistory.push(new AIMessage(answer));
+  console.log("Response:", answer);
 }
 
-export default { proccessURLToPgVectorStore, usePgVectorStore };
+export default { proccessURLToPgVectorStore, useConversationalRetrievalChain };
