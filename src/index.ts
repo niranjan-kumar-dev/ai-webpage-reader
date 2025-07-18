@@ -17,6 +17,7 @@ import {
   proccessURLToConversationalPgVectorStore,
   useConversationalRetrievalChain,
 } from "./services/from-template-conversational-retrieval-chain";
+import { scrapeSitemapAndSaveToDatabase } from "./services/scrapeContextualContent";
 
 async function askQuestion(query: string): Promise<string> {
   const rl = readline.createInterface({
@@ -32,6 +33,13 @@ async function askQuestion(query: string): Promise<string> {
 }
 
 (async () => {
+  // const { v4: uuidv4 } = require("uuid");
+  // await scrapeSitemapAndSaveToDatabase(
+  //   "https://www.gmrtranscription.com/sitemap.xml",
+  //   uuidv4(),
+  //   uuidv4(),
+  //   uuidv4()
+  // );
   //await proccessURLToConversationalPgVectorStore();
   while (true) {
     const userInput = await askQuestion(

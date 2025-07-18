@@ -20,7 +20,7 @@ export default function getPgVectorStoreConfig(): {
       password: process.env.PG_PASSWORD || "root",
       database: process.env.PG_DATABASE || "gmrt_webpages",
     } as PoolConfig,
-    tableName: process.env.PG_TABLE || "pages",
+    tableName: process.env.PG_TABLE || "embeddings",
     columns: {
       vectorColumnName: process.env.PG_VECTOR_COLUMN || "embedding",
       contentColumnName: process.env.PG_CONTENT_COLUMN || "content",

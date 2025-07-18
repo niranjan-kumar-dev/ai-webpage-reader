@@ -586,15 +586,16 @@ function blocksToText(blocks: StructuredBlock[]): string {
 // Function to generate embeddings
 async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    const embeddings = new OpenAIEmbeddings({
-      openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: process.env.OPENAI_EMBEDDING_MODEL,
+    const embeddings = new HuggingFaceInferenceEmbeddings({
+      apiKey: process.env.HUGGINGFACEHUB_API_KEY,
+      model: process.env.HUGGINGFACEHUB_API_MODEL, // Dimension: 768 (matches your DB)
+      provider: "auto",
     });
 
     const embedding = await embeddings.embedQuery(text);
     return embedding;
   } catch (error) {
-    //logger.error("Error generating embedding:", error);
+    logger.error("Error generating embedding:", error);
     throw error;
   }
 }
@@ -636,7 +637,7 @@ async function saveToDatabase(
 
     return result.rows[0].id;
   } catch (error) {
-    //logger.error("Error saving to database:", error);
+    logger.error("Error saving to database:", error);
     throw error;
   }
 }
@@ -648,12 +649,12 @@ async function scrapePageAndSaveToDatabase(
   botId: string
 ): Promise<EmbeddingResult | null> {
   try {
-    //logger.info(`Processing URL: ${url}`);
+    logger.info(`Processing URL: ${url}`);
 
     // Scrape the page
     const scrapedPage = await scrapePage(url);
     if (!scrapedPage) {
-      //logger.warn(`Failed to scrape page: ${url}`);
+      logger.warn(`Failed to scrape page: ${url}`);
       return null;
     }
 
@@ -661,7 +662,7 @@ async function scrapePageAndSaveToDatabase(
     const content = blocksToText(scrapedPage.blocks);
 
     if (!content || content.trim().length < 50) {
-      //  logger.warn(`Insufficient content for URL: ${url}`);
+      logger.warn(`Insufficient content for URL: ${url}`);
       return null;
     }
 
@@ -683,7 +684,7 @@ async function scrapePageAndSaveToDatabase(
       }
     );
 
-    // logger.info(`Successfully processed and saved URL: ${url} with ID: ${id}`);
+    logger.info(`Successfully processed and saved URL: ${url} with ID: ${id}`);
 
     return {
       id,
@@ -697,7 +698,7 @@ async function scrapePageAndSaveToDatabase(
       },
     };
   } catch (error) {
-    // logger.error(`Error processing URL ${url}:`, error);
+    logger.error(`Error processing URL ${url}:`, error);
     return null;
   }
 }
@@ -727,7 +728,7 @@ async function scrapeSitemapAndSaveToDatabase(
   try {
     // Update data source status to processing
     await pool.query(
-      "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+      "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
       [JSON.stringify({ status: "processing" }), dataSourceId]
     );
 
@@ -797,7 +798,7 @@ async function scrapeSitemapAndSaveToDatabase(
 
     // Update data source status to completed
     await pool.query(
-      "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+      "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
       [
         JSON.stringify({
           status: "completed",
@@ -824,7 +825,7 @@ async function scrapeSitemapAndSaveToDatabase(
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
     await pool.query(
-      "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+      "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
       [
         JSON.stringify({
           status: "failed",
@@ -839,7 +840,39 @@ async function scrapeSitemapAndSaveToDatabase(
     throw error;
   }
 }
+// Debug function to test sitemap parsing
+async function debugSitemap(sitemapUrl: string): Promise<void> {
+  logger.info(`🔍 Debugging sitemap: ${sitemapUrl}`);
+  try {
+    const sitemapEntries = await parseSitemap(sitemapUrl);
 
+    logger.info(`📊 Total URLs found: ${sitemapEntries.length}`);
+
+    if (sitemapEntries.length > 0) {
+      logger.info(`📋 First few URLs:`);
+      sitemapEntries.slice(0, 5).forEach((entry, index) => {
+        logger.info(`  ${index + 1}. ${entry.url}`);
+      });
+    }
+
+    // Test filtering
+    const urls = sitemapEntries.map((entry) => entry.url);
+    const filteredUrls = urls.filter(
+      (url) => !shouldSkipUrl(url, DEFAULT_SKIP_WORDS, DEFAULT_SKIP_EXTENSIONS)
+    );
+    logger.info(`🔍 URLs before filtering: ${urls.length}`);
+    logger.info(`🚫 URLs after filtering: ${filteredUrls.length}`);
+
+    if (filteredUrls.length > 0) {
+      logger.info(`✅ First few filtered URLs:`);
+      filteredUrls.slice(0, 5).forEach((url, index) => {
+        logger.info(`  ${index + 1}. ${url}`);
+      });
+    }
+  } catch (error) {
+    logger.error(`❌ Error debugging sitemap:`, error);
+  }
+}
 export {
   parseSitemap,
   loadHTML,
@@ -854,6 +887,7 @@ export {
   generateEmbedding,
   saveToDatabase,
   blocksToText,
+  debugSitemap,
   // Export constants and helper functions
   DEFAULT_SKIP_WORDS,
   DEFAULT_SKIP_EXTENSIONS,

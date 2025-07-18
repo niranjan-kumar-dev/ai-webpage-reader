@@ -13,6 +13,7 @@ import pool from "../config/database"; // Adjusted the path to match the correct
 import { logger } from "../utils/logger";
 import * as dotenv from "dotenv";
 import path from "path";
+import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
 
 // Ensure environment variables are loaded
 dotenv.config({ path: path.join(__dirname, "../../.env") });
@@ -69,9 +70,10 @@ const textSplitter = new RecursiveCharacterTextSplitter({
   chunkOverlap: 80,
 });
 
-const embeddings = new OpenAIEmbeddings({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-  modelName: process.env.OPENAI_EMBEDDING_MODEL,
+const embeddings = new HuggingFaceInferenceEmbeddings({
+  apiKey: process.env.HUGGINGFACEHUB_API_KEY,
+  model: process.env.HUGGINGFACEHUB_API_MODEL, // Dimension: 768 (matches your DB)
+  provider: "auto",
 });
 
 // Default words to skip in URLs
@@ -556,7 +558,7 @@ async function scrapeSitemapWithEmbedding(
     // Update status to processing if database integration is enabled
     if (saveToDatabase && dataSourceId) {
       await pool.query(
-        "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+        "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
         [JSON.stringify({ status: "processing" }), dataSourceId]
       );
     }
@@ -602,7 +604,7 @@ async function scrapeSitemapWithEmbedding(
     // Update status to completed if database integration is enabled
     if (saveToDatabase && dataSourceId) {
       await pool.query(
-        "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+        "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
         [
           JSON.stringify({
             status: "completed",
@@ -623,7 +625,7 @@ async function scrapeSitemapWithEmbedding(
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       await pool.query(
-        "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+        "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
         [
           JSON.stringify({ status: "failed", error: errorMessage }),
           dataSourceId,
@@ -823,9 +825,10 @@ function blocksToText(blocks: StructuredBlock[]): string {
 // Function to generate embeddings
 async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    const embeddings = new OpenAIEmbeddings({
-      openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: process.env.OPENAI_EMBEDDING_MODEL,
+    const embeddings = new HuggingFaceInferenceEmbeddings({
+      apiKey: process.env.HUGGINGFACEHUB_API_KEY,
+      model: process.env.HUGGINGFACEHUB_API_MODEL, // Dimension: 768 (matches your DB)
+      provider: "auto",
     });
 
     const embedding = await embeddings.embedQuery(text);
@@ -867,7 +870,7 @@ async function saveToDatabase(
         botId,
         dataSourceId,
         content,
-        JSON.stringify(embedding),
+        embedding, // Pass as array, not string
         JSON.stringify(enhancedMetadata),
       ]
     );
@@ -967,7 +970,7 @@ async function scrapeSitemapAndSaveToDatabase(
   try {
     // Update data source status to processing
     await pool.query(
-      "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+      "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
       [JSON.stringify({ status: "processing" }), dataSourceId]
     );
 
@@ -1037,7 +1040,7 @@ async function scrapeSitemapAndSaveToDatabase(
 
     // Update data source status to completed
     await pool.query(
-      "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+      "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
       [
         JSON.stringify({
           status: "completed",
@@ -1064,7 +1067,7 @@ async function scrapeSitemapAndSaveToDatabase(
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
     await pool.query(
-      "UPDATE data_sources SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
+      "UPDATE embeddings SET metadata = COALESCE(metadata, '{}') || $1 WHERE id = $2",
       [
         JSON.stringify({
           status: "failed",
