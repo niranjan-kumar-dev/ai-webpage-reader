@@ -13,7 +13,10 @@ import {
   pool,
   proccessURLToPgVectorStore,
 } from "./services/from-template-webpage-loader-pgvector";
-import { useConversationalRetrievalChain } from "./services/from-template-conversational-retrieval-chain";
+import {
+  proccessURLToConversationalPgVectorStore,
+  useConversationalRetrievalChain,
+} from "./services/from-template-conversational-retrieval-chain";
 
 async function askQuestion(query: string): Promise<string> {
   const rl = readline.createInterface({
@@ -29,7 +32,7 @@ async function askQuestion(query: string): Promise<string> {
 }
 
 (async () => {
-  //await proccessURLToPgVectorStore();
+  //await proccessURLToConversationalPgVectorStore();
   while (true) {
     const userInput = await askQuestion(
       "Enter your question (or type 'exit' to quit): "
@@ -42,8 +45,8 @@ async function askQuestion(query: string): Promise<string> {
       break;
     }
     console.log("Thinking...");
-    //await usePgVectorStore(userInput);
-    await useConversationalRetrievalChain(userInput);
+    await usePgVectorStore(userInput);
+    //await useConversationalRetrievalChain(userInput);
   }
   // Cleanly close the PostgreSQL pool and exit
   await pool.end();

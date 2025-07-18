@@ -3,34 +3,7 @@ declare global {
   var _chatHistory: (AIMessage | HumanMessage)[] | undefined;
 }
 // Utility function to get PGVectorStore config
-export function getPgVectorStoreConfig(): {
-  postgresConnectionOptions: PoolConfig;
-  tableName: string;
-  columns: {
-    vectorColumnName: string;
-    contentColumnName: string;
-    metadataColumnName: string;
-  };
-  distanceStrategy: DistanceStrategy;
-} {
-  return {
-    postgresConnectionOptions: {
-      type: "postgres",
-      host: "localhost",
-      port: 5432,
-      user: "postgres",
-      password: "root",
-      database: "gmrt_webpages",
-    } as PoolConfig,
-    tableName: "pages",
-    columns: {
-      vectorColumnName: "embedding",
-      contentColumnName: "content",
-      metadataColumnName: "metadata",
-    },
-    distanceStrategy: "cosine" as DistanceStrategy,
-  };
-}
+
 export const runtime = "nodejs";
 import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
 import { RetrievalQAChain } from "langchain/chains";
@@ -64,9 +37,10 @@ import {
 } from "@langchain/community/vectorstores/pgvector";
 import { PoolConfig } from "pg";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import getPgVectorStoreConfig from "../config/database-config";
 dotenv.config();
 
-export async function proccessURLToPgVectorStore(): Promise<void> {
+export async function proccessURLToConversationalPgVectorStore(): Promise<void> {
   // const model = getChatModel();
   // if (!model) {
   //   throw new Error("No chat model found. Please check your configuration.");
@@ -84,6 +58,7 @@ export async function proccessURLToPgVectorStore(): Promise<void> {
   //   prompt: prompt,
   // });
   const url = "https://www.gmrtranscription.com/academic-transcription/";
+
   const loader = new PuppeteerWebBaseLoader(url, {
     launchOptions: {
       headless: "new",
@@ -91,12 +66,12 @@ export async function proccessURLToPgVectorStore(): Promise<void> {
     async evaluate(page: puppeteer.Page, browser: puppeteer.Browser) {
       try {
         await page.goto(url, { waitUntil: "networkidle0" });
-        const textContent = await page.evaluate(() => {
+        const htmlContent = await page.evaluate(() => {
           const bodyElement = document.querySelector("body");
-          return bodyElement ? bodyElement.innerText : "";
+          return bodyElement ? bodyElement.innerHTML : "";
         });
         await browser.close();
-        return textContent || "";
+        return htmlContent || "";
       } catch (error) {
         console.error("Error during page evaluation:", error);
         await browser.close();
@@ -104,39 +79,34 @@ export async function proccessURLToPgVectorStore(): Promise<void> {
       }
     },
   });
-  console.log("Loading URL to Docs");
+  // console.log("Loading URL to Docs");
   const urlDocs = await loader.load();
+  //console.log("Url Docs", urlDocs);
   const pageContent = urlDocs[0].pageContent;
-  console.log("Page content loaded:", pageContent);
-  // Load the HTML content into a Cheerio document
+  //console.log("Page content loaded:", pageContent);
+  // Custom chunking: group content by <section> tags
   const $ = cheerio.load(pageContent);
-  // Extract text from the body`
-  $("script, style").remove(); // Remove script and style tags`
+  $("script, style").remove();
 
-  //Further clean-up using regular expressions (exmple)
-  const cleanedText = $("body")
-    .html()
-    ?.replace(/<style[^>]*>.*<\/style>/, " ");
-
-  // Load the cleaned HTML into again to extract text
-  const cleaned$ = cheerio.load(cleanedText!);
-  const textContent = cleaned$("body").text();
-  console.log("Extracted text:", textContent);
-  const docs = textContent.replace(/[^\x20-\x7E]+/g, " ");
-  console.log("Cleaned text:", docs);
-
-  // create document instance
-  const documents = [new Document({ pageContent: docs })];
-  const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 200,
-    chunkOverlap: 50,
+  const documents: Document[] = [];
+  $("section").each((_, section) => {
+    const sectionTitle = $(section).find("h1, h2, h3").first().text().trim();
+    // Get all text content inside the section
+    const sectionText = $(section).text().replace(/\s+/g, " ").trim();
+    // If section has a title, use it; else use first 40 chars as a pseudo-title
+    const title =
+      sectionTitle ||
+      sectionText.slice(0, 40) + (sectionText.length > 40 ? "..." : "");
+    if (sectionText) {
+      documents.push(new Document({ pageContent: `${title}\n${sectionText}` }));
+    }
   });
-  const splitDocuments = await splitter.splitDocuments(documents);
-  console.log("Split documents:", splitDocuments);
+  //console.log("Section-based chunked documents:", documents);
+  //console.log("Section-based chunked documents Length:", documents.length);
 
   // Add a hash to each chunk for deduplication
   const crypto = await import("crypto");
-  const documentsWithMetadata = splitDocuments.map((doc, index) => {
+  const documentsWithMetadata = documents.map((doc, index) => {
     const hash = crypto
       .createHash("sha256")
       .update(doc.pageContent)
@@ -164,9 +134,9 @@ export async function proccessURLToPgVectorStore(): Promise<void> {
   //   const batch = splitDocuments.slice(i, i + batchSize);
   //   allDocs.push(...batch);
   // }
-  if (!splitDocuments.length) {
-    throw new Error("No documents to embed.");
-  }
+  // if (!documents.length) {
+  //   throw new Error("No documents to embed.");
+  // }
 
   try {
     const vectorStore = await PGVectorStore.initialize(
@@ -213,9 +183,9 @@ export async function proccessURLToPgVectorStore(): Promise<void> {
   //   splitDocuments,
   //   embeddings
   // );
-  //const vectorStore = await FaissStore.fromDocuments(allDocs, embeddings);
+  // const vectorStore = await FaissStore.fromDocuments(allDocs, embeddings);
   //await vectorStore.save("./vector_store-url");
-  //console.log("Vector store created and saved");
+  // console.log("Vector store created and saved");
 }
 
 /*Using a Faiss Vector store in chain */
@@ -330,4 +300,7 @@ export async function useConversationalRetrievalChain(
   console.log("Response:", answer);
 }
 
-export default { proccessURLToPgVectorStore, useConversationalRetrievalChain };
+export default {
+  proccessURLToConversationalPgVectorStore,
+  useConversationalRetrievalChain,
+};
